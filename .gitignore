@@ -216,3 +216,33 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+EchoBrief End-to-End Technical Specification Document.pdf
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Frontend build output
+frontend/dist/
+frontend/.env
+
+# Backend env
+backend/.env
+
+# uv virtual environment (already has .venv above, but explicit paths)
+backend/.venv/
+
+# Temp media files
+C:/temp/echobrief/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
