@@ -42,4 +42,5 @@ class SummaryResponse(BaseModel):
     executive_summary: str
     key_takeaways: list[KeyTakeaway]
     action_items: list[ActionItem]
+    generation_time_sec: float | None
     created_at: datetime

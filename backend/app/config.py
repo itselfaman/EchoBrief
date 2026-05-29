@@ -14,6 +14,19 @@ from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _parse_list_field(value: Any, default: list[str]) -> list[str]:
+    """Parse a list field that may come in as a comma-separated string, JSON array string, or list."""
+    if isinstance(value, list):
+        return [str(v).strip() for v in value]
+    if isinstance(value, str):
+        v = value.strip()
+        if v.startswith("["):
+            import json
+            return json.loads(v)
+        return [o.strip() for o in v.split(",") if o.strip()]
+    return default
+
+
 class Settings(BaseSettings):
     """
     Centralised application settings loaded from environment variables.
@@ -37,10 +50,9 @@ class Settings(BaseSettings):
 
     # ── API ───────────────────────────────────────────────────────────────────
     API_V1_PREFIX: str = "/api/v1"
-    ALLOWED_ORIGINS: list[str] = [
-        "http://localhost:5173",
-        "http://localhost:3000",
-    ]
+    # Stored internally as Any so pydantic-settings does NOT try to JSON-decode
+    # the comma-separated env string. Converted to list[str] by model_validator.
+    ALLOWED_ORIGINS: Any = None
 
     # ── Database ──────────────────────────────────────────────────────────────
     DATABASE_URL: str  # required — postgresql+asyncpg://...
@@ -65,27 +77,11 @@ class Settings(BaseSettings):
 
     # ── Google Gemini (Summarization) ─────────────────────────────────────────
     GEMINI_API_KEY: str  # required
-    GEMINI_MODEL: str = "gemini-1.5-flash"
+    GEMINI_MODEL: str = "gemini-2.0-flash"
 
     # ── File Upload Limits ────────────────────────────────────────────────────
-    MAX_FILE_SIZE_BYTES: int = 10 * 1024 * 1024 * 1024  # 10 GB
-    ALLOWED_MIME_TYPES: list[str] = [
-        "audio/mpeg",
-        "audio/mp4",
-        "audio/wav",
-        "audio/ogg",
-        "audio/flac",
-        "audio/x-m4a",
-        "audio/webm",
-        "audio/aac",
-        "video/mp4",
-        "video/mpeg",
-        "video/webm",
-        "video/quicktime",
-        "video/x-msvideo",
-        "video/x-matroska",
-        "video/3gpp",
-    ]
+    MAX_FILE_SIZE_BYTES: int = 50 * 1024 * 1024  # 50 MB
+    ALLOWED_MIME_TYPES: Any = None  # same pattern as ALLOWED_ORIGINS
 
     # ── Rate Limiting ─────────────────────────────────────────────────────────
     RATE_LIMIT_UPLOADS_PER_MINUTE: int = 10
@@ -133,14 +129,39 @@ class Settings(BaseSettings):
             raise ValueError("SUPABASE_URL must be an HTTPS URL.")
         return v.rstrip("/")
 
+    _DEFAULT_ORIGINS: list[str] = [
+        "http://localhost:5173",
+        "http://localhost:3000",
+    ]
+
+    _DEFAULT_MIME_TYPES: list[str] = [
+        "audio/mpeg", "audio/mp4", "audio/wav", "audio/ogg", "audio/flac",
+        "audio/x-m4a", "audio/webm", "audio/aac",
+        "video/mp4", "video/mpeg", "video/webm", "video/quicktime",
+        "video/x-msvideo", "video/x-matroska", "video/3gpp",
+    ]
+
     @model_validator(mode="before")
     @classmethod
-    def expand_allowed_origins(cls, values: Any) -> Any:
-        """Allow ALLOWED_ORIGINS to be passed as a comma-separated string."""
+    def expand_list_fields(cls, values: Any) -> Any:
+        """Parse comma-separated or JSON-array list fields from env variables."""
         if isinstance(values, dict):
-            origins = values.get("ALLOWED_ORIGINS")
-            if isinstance(origins, str):
-                values["ALLOWED_ORIGINS"] = [o.strip() for o in origins.split(",")]
+            defaults_origins = [
+                "http://localhost:5173",
+                "http://localhost:3000",
+            ]
+            defaults_mime = [
+                "audio/mpeg", "audio/mp4", "audio/wav", "audio/ogg", "audio/flac",
+                "audio/x-m4a", "audio/webm", "audio/aac",
+                "video/mp4", "video/mpeg", "video/webm", "video/quicktime",
+                "video/x-msvideo", "video/x-matroska", "video/3gpp",
+            ]
+            values["ALLOWED_ORIGINS"] = _parse_list_field(
+                values.get("ALLOWED_ORIGINS"), defaults_origins
+            )
+            values["ALLOWED_MIME_TYPES"] = _parse_list_field(
+                values.get("ALLOWED_MIME_TYPES"), defaults_mime
+            )
         return values
 
 

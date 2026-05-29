@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app.api.deps import get_current_user, get_transcript_service
+from app.core.rate_limit import limiter
 from app.core.security import CurrentUser
 from app.schemas.transcript import TranscriptResponse
 from app.services.transcript_service import TranscriptService
@@ -23,7 +24,9 @@ router = APIRouter(prefix="/media", tags=["Transcripts"])
         "Returns 404 if the file is still processing."
     ),
 )
+@limiter.limit("60/minute")
 async def get_transcript(
+    request: Request,
     file_id: uuid.UUID,
     current_user: CurrentUser = Depends(get_current_user),
     service: TranscriptService = Depends(get_transcript_service),

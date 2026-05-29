@@ -64,3 +64,13 @@ export const getSummary = async (fileId) => {
   const response = await apiClient.get(`/media/${fileId}/summary`);
   return response.data;
 };
+
+/**
+ * Retry processing for a failed media file.
+ * @param {string} fileId - UUID of the media file
+ * @returns {Promise<{ message: string }>}
+ */
+export const retryProcessing = async (fileId) => {
+  const response = await apiClient.post(`/media/${fileId}/retry`);
+  return response.data;
+};

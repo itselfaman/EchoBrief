@@ -1,15 +1,20 @@
 import React from 'react';
-import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../../store/authContext.jsx';
 
 export default function Navbar() {
   const { user, signOut } = useAuth();
-  const navigate = useNavigate();
   const location = useLocation();
 
   const handleSignOut = async () => {
+    // Do NOT call navigate() here — signOut() updates the Supabase session,
+    // which fires onAuthStateChange → sets session=null → ProtectedRoute
+    // renders <Navigate to="/auth" replace /> declaratively.
+    //
+    // Calling navigate('/auth') imperatively at the same time created a
+    // double-navigation race: two pushes to the history stack in the same tick,
+    // causing a redirect loop on the next render cycle.
     await signOut();
-    navigate('/auth');
   };
 
   return (

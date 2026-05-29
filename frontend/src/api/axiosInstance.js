@@ -49,8 +49,9 @@ apiClient.interceptors.response.use(
 
     if (response?.status === 401) {
       // Token expired — sign out and redirect to auth page
-      supabase.auth.signOut();
-      window.location.href = '/auth';
+      supabase.auth.signOut().finally(() => {
+        window.location.href = '/auth';
+      });
       return Promise.reject(new Error('Session expired. Please sign in again.'));
     }
 

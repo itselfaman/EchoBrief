@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { getMediaFile, getTranscript, getSummary } from '../api/mediaApi.js';
+import html2pdf from 'html2pdf.js';
+import { getMediaFile, getTranscript, getSummary, retryProcessing } from '../api/mediaApi.js';
 import StatusBadge from '../components/StatusBadge/StatusBadge.jsx';
 
 const TABS = [
@@ -9,9 +10,19 @@ const TABS = [
   { id: 'transcript', label: '📄 Transcript' },
 ];
 
+const formatDuration = (seconds) => {
+  if (!seconds) return '';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  return `${m}m ${s}s`;
+};
+
 export default function ResultPage() {
   const { fileId } = useParams();
   const [activeTab, setActiveTab] = useState('summary');
+  const [isRetrying, setIsRetrying] = useState(false);
 
   const fileQuery = useQuery({
     queryKey: ['media-file', fileId],
@@ -35,6 +46,42 @@ export default function ResultPage() {
   const file = fileQuery.data;
   const summary = summaryQuery.data;
   const transcript = transcriptQuery.data;
+
+  const handleRetry = async () => {
+    try {
+      setIsRetrying(true);
+      await retryProcessing(fileId);
+      fileQuery.refetch();
+    } catch (err) {
+      alert('Failed to retry: ' + (err.response?.data?.detail || err.message));
+    } finally {
+      setIsRetrying(false);
+    }
+  };
+
+  const handleExportPDF = () => {
+    const element = document.getElementById('summary-content');
+    if (!element) return;
+    const opt = {
+      margin:       0.5,
+      filename:     `${file?.file_name || 'Summary'}.pdf`,
+      image:        { type: 'jpeg', quality: 0.98 },
+      html2canvas:  { scale: 2, useCORS: true },
+      jsPDF:        { unit: 'in', format: 'letter', orientation: 'portrait' }
+    };
+    html2pdf().set(opt).from(element).save();
+  };
+
+  const handleExportTXT = () => {
+    if (!transcript?.raw_text) return;
+    const element = document.createElement("a");
+    const fileBlob = new Blob([transcript.raw_text], {type: 'text/plain'});
+    element.href = URL.createObjectURL(fileBlob);
+    element.download = `${file?.file_name || 'Transcript'}.txt`;
+    document.body.appendChild(element);
+    element.click();
+    document.body.removeChild(element);
+  };
 
   return (
     <>
@@ -285,6 +332,7 @@ export default function ResultPage() {
                 {new Date(file.created_at).toLocaleDateString('en-US', {
                   year: 'numeric', month: 'long', day: 'numeric'
                 })}
+                {file.audio_duration_seconds && ` • ${formatDuration(file.audio_duration_seconds)}`}
               </p>
             </div>
             <StatusBadge status={file.status} />
@@ -296,7 +344,7 @@ export default function ResultPage() {
           <div className="result-processing">
             <div className="result-processing-icon" aria-hidden="true">⚙️</div>
             <div className="result-processing-title">
-              {file.status === 'pending' ? 'Queued for processing…' : 'AI is working its magic…'}
+              {file.status === 'pending' ? 'Queued for processing…' : (file.processing_message || 'AI is working its magic…')}
             </div>
             <div className="result-processing-sub">
               This page will update automatically. Grab a coffee ☕
@@ -304,8 +352,11 @@ export default function ResultPage() {
             <div className="spinner" style={{ width: 32, height: 32, marginTop: 8 }} />
           </div>
         ) : file?.status === 'failed' ? (
-          <div className="dashboard-error" style={{ marginTop: 'var(--space-4)' }}>
-            ⚠️ Processing failed: {file.error_message || 'Unknown error'}
+          <div className="dashboard-error" style={{ marginTop: 'var(--space-4)', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 'var(--space-4)' }}>
+            <div>⚠️ Processing failed: {file.error_message || 'Unknown error'}</div>
+            <button className="btn-primary" onClick={handleRetry} disabled={isRetrying}>
+              {isRetrying ? 'Retrying...' : 'Retry Processing'}
+            </button>
           </div>
         ) : file?.status === 'completed' ? (
           <>
@@ -330,54 +381,72 @@ export default function ResultPage() {
               summaryQuery.isLoading ? (
                 <div className="skeleton" style={{ height: 300, borderRadius: 'var(--radius-lg)' }} />
               ) : summary ? (
-                <div>
-                  {/* Executive Summary */}
+                summary.executive_summary === "No speech detected in the uploaded audio." ? (
+                  <div className="summary-executive" style={{ textAlign: 'center', padding: 'var(--space-12) var(--space-6)', border: '2px dashed rgba(255,255,255,0.1)' }}>
+                    <div style={{ fontSize: '3rem', marginBottom: 'var(--space-4)' }}>🤫</div>
+                    <h2 style={{ color: 'var(--color-text-primary)', marginBottom: 'var(--space-2)' }}>No Speech Detected</h2>
+                    <p style={{ color: 'var(--color-text-muted)' }}>We couldn't detect enough speech in this audio file to generate a summary.</p>
+                  </div>
+                ) : (
                   <div>
-                    <div className="summary-section-title">✨ Executive Summary</div>
-                    <div className="summary-executive">{summary.executive_summary}</div>
-                  </div>
-
-                  {/* Key Takeaways + Action Items */}
-                  <div className="summary-grid">
-                    {/* Key Takeaways */}
-                    <div className="summary-card">
-                      <div className="summary-section-title">💡 Key Takeaways</div>
-                      <div className="takeaways-list">
-                        {(summary.key_takeaways || []).map((item, i) => (
-                          <div key={i} className="takeaway-item animate-fade-in" style={{ animationDelay: `${i * 0.05}s` }}>
-                            <div className={`takeaway-dot takeaway-dot-${item.category || 'insight'}`} aria-hidden="true" />
-                            <div className="takeaway-text">{item.point}</div>
-                          </div>
-                        ))}
-                      </div>
+                    {/* Actions & Metrics */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-4)' }}>
+                      <div className="summary-section-title" style={{ margin: 0 }}>✨ Executive Summary</div>
+                      <button className="btn-secondary" onClick={handleExportPDF} style={{ padding: '6px 12px', fontSize: '0.8rem' }}>Export PDF</button>
                     </div>
 
-                    {/* Action Items */}
-                    <div className="summary-card">
-                      <div className="summary-section-title">✅ Action Items</div>
-                      <div className="action-items-list">
-                        {(summary.action_items || []).map((item, i) => (
-                          <div key={i} className="action-item animate-fade-in" style={{ animationDelay: `${i * 0.05}s` }}>
-                            <div className="action-item-task">{item.task}</div>
-                            <div className="action-item-meta">
-                              {item.owner && (
-                                <span className="action-owner">👤 {item.owner}</span>
-                              )}
-                              <span className={`priority-${item.priority || 'medium'}`}>
-                                {item.priority === 'high' ? '🔴' : item.priority === 'low' ? '🟢' : '🟡'} {item.priority || 'medium'}
-                              </span>
-                            </div>
+                    <div id="summary-content">
+                      <div className="summary-executive">{summary.executive_summary}</div>
+
+                      {/* Key Takeaways + Action Items */}
+                      <div className="summary-grid">
+                        {/* Key Takeaways */}
+                        <div className="summary-card">
+                          <div className="summary-section-title">💡 Key Takeaways</div>
+                          <div className="takeaways-list">
+                            {(summary.key_takeaways || []).map((item, i) => (
+                              <div key={i} className="takeaway-item animate-fade-in" style={{ animationDelay: `${i * 0.05}s` }}>
+                                <div className={`takeaway-dot takeaway-dot-${item.category || 'insight'}`} aria-hidden="true" />
+                                <div className="takeaway-text">{item.point}</div>
+                              </div>
+                            ))}
                           </div>
-                        ))}
-                        {(summary.action_items || []).length === 0 && (
-                          <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
-                            No action items identified.
-                          </p>
-                        )}
+                        </div>
+
+                        {/* Action Items */}
+                        <div className="summary-card">
+                          <div className="summary-section-title">✅ Action Items</div>
+                          <div className="action-items-list">
+                            {(summary.action_items || []).map((item, i) => (
+                              <div key={i} className="action-item animate-fade-in" style={{ animationDelay: `${i * 0.05}s` }}>
+                                <div className="action-item-task">{item.task}</div>
+                                <div className="action-item-meta">
+                                  {item.owner && (
+                                    <span className="action-owner">👤 {item.owner}</span>
+                                  )}
+                                  <span className={`priority-${item.priority || 'medium'}`}>
+                                    {item.priority === 'high' ? '🔴' : item.priority === 'low' ? '🟢' : '🟡'} {item.priority || 'medium'}
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                            {(summary.action_items || []).length === 0 && (
+                              <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
+                                No action items identified.
+                              </p>
+                            )}
+                          </div>
+                        </div>
                       </div>
+
+                      {summary.generation_time_sec && (
+                        <div style={{ marginTop: 'var(--space-6)', fontSize: '0.8rem', color: 'var(--color-text-muted)', textAlign: 'right' }}>
+                          Generated in {summary.generation_time_sec}s
+                        </div>
+                      )}
                     </div>
                   </div>
-                </div>
+                )
               ) : null
             )}
 
@@ -387,7 +456,12 @@ export default function ResultPage() {
                 <div className="skeleton" style={{ height: 400, borderRadius: 'var(--radius-lg)' }} />
               ) : transcript ? (
                 <div>
-                  <div className="summary-section-title">📄 Full Transcript</div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-4)' }}>
+                    <div className="summary-section-title" style={{ margin: 0 }}>
+                      📄 Full Transcript {transcript.word_count && `(${transcript.word_count} words)`}
+                    </div>
+                    <button className="btn-secondary" onClick={handleExportTXT} style={{ padding: '6px 12px', fontSize: '0.8rem' }}>Export TXT</button>
+                  </div>
                   <div className="transcript-box" role="document" aria-label="Transcript content">
                     {transcript.raw_text}
                   </div>

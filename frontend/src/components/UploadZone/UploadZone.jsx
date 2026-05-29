@@ -5,7 +5,7 @@ import { supabase, STORAGE_BUCKET } from '../../supabaseClient.js';
 import { uploadMedia } from '../../api/mediaApi.js';
 import { useAuth } from '../../store/authContext.jsx';
 
-const MAX_SIZE = 10 * 1024 * 1024 * 1024; // 10GB
+const MAX_SIZE = 50 * 1024 * 1024; // 50MB
 const ACCEPTED_TYPES = {
   'audio/*': ['.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac', '.webm'],
   'video/*': ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.mpeg', '.3gp'],
@@ -280,7 +280,7 @@ export default function UploadZone() {
                   : 'Drop your audio or video file here'}
               </p>
               <p className="upload-subtitle">
-                or click to browse — up to 10 GB
+                or click to browse — up to 50 MB
               </p>
               <button type="button" className="btn btn-primary" tabIndex={-1}>
                 Choose File

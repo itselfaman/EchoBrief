@@ -6,7 +6,7 @@ from app.api.v1.media import router as media_router
 from app.api.v1.summaries import router as summaries_router
 from app.api.v1.transcripts import router as transcripts_router
 
-v1_router = APIRouter(prefix="/v1")
+v1_router = APIRouter()
 
 v1_router.include_router(media_router)
 v1_router.include_router(transcripts_router)

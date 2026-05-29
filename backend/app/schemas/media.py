@@ -70,6 +70,8 @@ class MediaFileResponse(BaseModel):
     file_size_bytes: int
     status: FileStatus
     error_message: str | None
+    processing_message: str | None
+    audio_duration_seconds: float | None
     created_at: datetime
     updated_at: datetime
 

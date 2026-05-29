@@ -7,7 +7,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Text, UniqueConstraint, func, Integer
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -53,6 +53,11 @@ class Transcript(Base):
         JSONB,
         nullable=True,
         comment="Structured segments: [{start, end, text, speaker}]",
+    )
+    word_count: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="Total word count in the transcript",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

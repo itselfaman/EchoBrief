@@ -23,14 +23,16 @@ import asyncio
 import json
 import os
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
 import aiofiles
 import aiohttp
 import dramatiq
-import google.generativeai as genai
-from openai import OpenAI
+from google import genai
+from google.genai import types as genai_types
+import ollama
 
 from app.config import settings
 from app.core.logging import get_logger
@@ -45,10 +47,18 @@ logger = get_logger(__name__)
 
 # ── AI Clients ────────────────────────────────────────────────────────────────
 
-openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+gemini_client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
-genai.configure(api_key=settings.GEMINI_API_KEY)
-gemini_model = genai.GenerativeModel(settings.GEMINI_MODEL)
+_whisper_model = None
+
+def get_whisper_model():
+    global _whisper_model
+    if _whisper_model is None:
+        from faster_whisper import WhisperModel
+        logger.info("Loading faster-whisper model...")
+        # Using base model, compute_type=int8 for best CPU performance on Windows
+        _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+    return _whisper_model
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -95,106 +105,39 @@ async def _download_file(url: str, destination: Path) -> None:
     )
 
 
-def _transcribe_with_whisper(file_path: Path) -> tuple[str, list[dict]]:
+def _transcribe_with_faster_whisper(file_path: Path) -> tuple[str, list[dict], float]:
     """
-    Transcribe an audio file using OpenAI Whisper API.
-
-    Handles large files by splitting into chunks < 25MB (Whisper API limit).
-
-    Returns:
-        (raw_text, segments) tuple.
+    Transcribe an audio file using local faster-whisper model.
     """
-    file_size = file_path.stat().st_size
-    chunk_limit = settings.whisper_chunk_size_bytes  # default 20MB
-
-    if file_size <= chunk_limit:
-        # Small file — transcribe directly
-        with open(file_path, "rb") as audio_file:
-            response = openai_client.audio.transcriptions.create(
-                model=settings.WHISPER_MODEL,
-                file=audio_file,
-                response_format="verbose_json",
-                timestamp_granularities=["segment"],
-            )
-        segments = [
-            {
-                "start": s.start,
-                "end": s.end,
-                "text": s.text.strip(),
-                "speaker": None,
-            }
-            for s in (response.segments or [])
-        ]
-        return response.text, segments
-    else:
-        # Large file — split into chunks using pydub
-        logger.info(
-            "File exceeds Whisper chunk limit, splitting",
-            file_size=file_size,
-            chunk_limit=chunk_limit,
-        )
-        return _transcribe_chunked(file_path, chunk_limit)
-
-
-def _transcribe_chunked(file_path: Path, chunk_size_bytes: int) -> tuple[str, list[dict]]:
-    """
-    Split a large audio file into chunks and transcribe each segment.
-
-    Uses pydub for audio splitting (requires ffmpeg installed).
-    """
+    model = get_whisper_model()
+    
     try:
-        from pydub import AudioSegment
-    except ImportError as exc:
-        raise RuntimeError(
-            "pydub is required for large file transcription. "
-            "Ensure ffmpeg is installed: https://ffmpeg.org/download.html"
-        ) from exc
-
-    audio = AudioSegment.from_file(str(file_path))
-    duration_ms = len(audio)
-    # Approximate ms per chunk based on file size ratio
-    chunk_ms = int(duration_ms * (chunk_size_bytes / file_path.stat().st_size))
-    chunk_ms = max(chunk_ms, 60_000)  # minimum 1-minute chunks
-
-    all_text_parts: list[str] = []
-    all_segments: list[dict] = []
-    time_offset = 0.0
-
-    chunk_idx = 0
-    for start_ms in range(0, duration_ms, chunk_ms):
-        end_ms = min(start_ms + chunk_ms, duration_ms)
-        chunk = audio[start_ms:end_ms]
-
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-            tmp_path = tmp.name
-            chunk.export(tmp_path, format="mp3")
-
-        try:
-            with open(tmp_path, "rb") as audio_file:
-                response = openai_client.audio.transcriptions.create(
-                    model=settings.WHISPER_MODEL,
-                    file=audio_file,
-                    response_format="verbose_json",
-                    timestamp_granularities=["segment"],
-                )
-
-            all_text_parts.append(response.text)
-            for s in (response.segments or []):
-                all_segments.append({
-                    "start": round(s.start + time_offset, 3),
-                    "end": round(s.end + time_offset, 3),
-                    "text": s.text.strip(),
-                    "speaker": None,
-                })
-
-            time_offset += (end_ms - start_ms) / 1000.0
-        finally:
-            os.unlink(tmp_path)
-
-        chunk_idx += 1
-        logger.info("Transcribed chunk", chunk=chunk_idx, start_ms=start_ms, end_ms=end_ms)
-
-    return " ".join(all_text_parts), all_segments
+        # We do not need to chunk manually since faster-whisper handles long audio via VAD/chunking internally
+        segments_generator, info = model.transcribe(str(file_path), beam_size=5, word_timestamps=False)
+    except IndexError as exc:
+        # faster-whisper raises IndexError (with an empty or any message) when the file
+        # has no detectable audio track. Catch any IndexError from this call and surface
+        # it as a clear user-facing ValueError.
+        logger.error(
+            "No audio track found in the media file",
+            file_path=str(file_path),
+            error=str(exc) or "(no message — likely empty audio track)",
+        )
+        raise ValueError("No audio track detected in the uploaded file.") from exc
+    
+    all_text_parts = []
+    all_segments = []
+    
+    for segment in segments_generator:
+        all_text_parts.append(segment.text.strip())
+        all_segments.append({
+            "start": round(segment.start, 3),
+            "end": round(segment.end, 3),
+            "text": segment.text.strip(),
+            "speaker": None,
+        })
+        
+    return " ".join(all_text_parts), all_segments, info.duration
 
 
 def _generate_gemini_summary(raw_text: str) -> dict:
@@ -209,23 +152,51 @@ def _generate_gemini_summary(raw_text: str) -> dict:
 
     prompt = _GEMINI_SUMMARY_PROMPT.format(transcript=truncated)
 
-    response = gemini_model.generate_content(
-        prompt,
-        generation_config=genai.types.GenerationConfig(
-            temperature=0.3,
-            max_output_tokens=8192,
-        ),
-    )
+    try:
+        response = gemini_client.models.generate_content(
+            model=settings.GEMINI_MODEL,
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                temperature=0.3,
+                max_output_tokens=8192,
+            ),
+        )
 
-    content = response.text.strip()
+        content = response.text.strip()
 
-    # Strip markdown code fences if Gemini wraps the JSON
-    if content.startswith("```"):
-        content = content.split("```")[1]
-        if content.startswith("json"):
-            content = content[4:]
+        # Strip markdown code fences if Gemini wraps the JSON
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
 
-    return json.loads(content)
+        return json.loads(content)
+    except Exception as exc:
+        logger.warning("Gemini API failed, falling back to Ollama.", error=str(exc))
+        return _generate_ollama_summary(raw_text)
+
+def _generate_ollama_summary(raw_text: str) -> dict:
+    """
+    Generate structured summary using local Ollama model (llama3.2).
+    """
+    max_chars = 100_000  # Local models usually have smaller context window (8k-128k)
+    truncated = raw_text[:max_chars] if len(raw_text) > max_chars else raw_text
+
+    prompt = _GEMINI_SUMMARY_PROMPT.format(transcript=truncated)
+    
+    logger.info("Calling local Ollama API (llama3.2)...")
+    try:
+        response = ollama.generate(
+            model="llama3.2",
+            prompt=prompt,
+            format="json",
+            options={"temperature": 0.3}
+        )
+        content = response["response"].strip()
+        return json.loads(content)
+    except Exception as exc:
+        logger.error("Ollama fallback failed", error=str(exc))
+        raise RuntimeError("Both Gemini and Ollama fallback failed to summarize.") from exc
 
 
 # ── Dramatiq Actor ────────────────────────────────────────────────────────────
@@ -276,6 +247,9 @@ async def _process_media_async(file_id: str) -> None:
         tmp_file: Path | None = None
         try:
             # ── 4. Get signed download URL ─────────────────────────────────────
+            media_file.processing_message = "Downloading media..."
+            await db.commit()
+            
             storage = StorageService()
             signed_url = storage.get_signed_download_url(
                 media_file.storage_path,
@@ -291,9 +265,12 @@ async def _process_media_async(file_id: str) -> None:
 
             await _download_file(signed_url, tmp_file)
 
-            # ── 6. Transcribe with Whisper ────────────────────────────────────
-            logger.info("Starting Whisper transcription", file_id=file_id)
-            raw_text, segments = _transcribe_with_whisper(tmp_file)
+            # ── 6. Transcribe with local faster-whisper ───────────────────────
+            media_file.processing_message = "Transcribing audio..."
+            await db.commit()
+            logger.info("Starting local Whisper transcription", file_id=file_id)
+            raw_text, segments, duration = _transcribe_with_faster_whisper(tmp_file)
+            media_file.audio_duration_seconds = duration
             logger.info(
                 "Transcription complete",
                 file_id=file_id,
@@ -301,9 +278,23 @@ async def _process_media_async(file_id: str) -> None:
                 segment_count=len(segments),
             )
 
-            # ── 7. Summarize with Gemini Flash ────────────────────────────────
-            logger.info("Starting Gemini summarization", file_id=file_id)
-            summary_data = _generate_gemini_summary(raw_text)
+            # ── 7. Summarize with Gemini Flash / Ollama ────────────────────────
+            media_file.processing_message = "Generating summary..."
+            await db.commit()
+            logger.info("Starting summarization", file_id=file_id)
+            start_time = time.monotonic()
+            # Threshold set to 50 to avoid Whisper hallucinated short segments (e.g. "Thank you.")
+            if len(raw_text.strip()) < 50:
+                logger.info("Transcript is empty or below minimum character threshold. Skipping summarization.", file_id=file_id)
+                summary_data = {
+                    "executive_summary": "No speech detected in the uploaded audio.",
+                    "key_takeaways": [],
+                    "action_items": []
+                }
+            else:
+                summary_data = _generate_gemini_summary(raw_text)
+            
+            generation_time = time.monotonic() - start_time
             logger.info("Summarization complete", file_id=file_id)
 
             # ── 8. Atomically save Transcript + Summary ───────────────────────
@@ -311,6 +302,7 @@ async def _process_media_async(file_id: str) -> None:
                 file_id=fid,
                 raw_text=raw_text,
                 segments=segments if segments else None,
+                word_count=len(raw_text.split()),
             )
             db.add(transcript)
 
@@ -319,11 +311,13 @@ async def _process_media_async(file_id: str) -> None:
                 executive_summary=summary_data["executive_summary"],
                 key_takeaways=summary_data.get("key_takeaways", []),
                 action_items=summary_data.get("action_items", []),
+                generation_time_sec=round(generation_time, 2),
             )
             db.add(summary)
 
             # ── 9. Mark as completed ──────────────────────────────────────────
             media_file.status = FileStatus.COMPLETED
+            media_file.processing_message = None
             media_file.error_message = None
 
             await db.commit()
@@ -353,5 +347,8 @@ async def _process_media_async(file_id: str) -> None:
         finally:
             # ── Cleanup temp files ─────────────────────────────────────────────
             if tmp_file and tmp_file.exists():
-                tmp_file.unlink()
-                logger.info("Cleaned up temp file", path=str(tmp_file))
+                try:
+                    tmp_file.unlink()
+                    logger.info("Cleaned up temp file", path=str(tmp_file))
+                except Exception as e:
+                    logger.warning("Failed to clean up temp file", path=str(tmp_file), error=str(e))

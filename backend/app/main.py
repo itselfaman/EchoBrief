@@ -24,14 +24,13 @@ from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 
 from app.api.v1.router import v1_router
 from app.config import settings
 from app.core.exceptions import EchoBriefError
 from app.core.logging import configure_logging
+from app.core.rate_limit import limiter
 from app.database import engine
 
 # Configure structured logging before anything else
@@ -73,11 +72,6 @@ async def lifespan(app: FastAPI):
     # Shutdown
     await engine.dispose()
     logger.info("EchoBrief API shut down cleanly")
-
-
-# ── Rate Limiter ──────────────────────────────────────────────────────────────
-
-limiter = Limiter(key_func=get_remote_address)
 
 
 # ── App Factory ───────────────────────────────────────────────────────────────

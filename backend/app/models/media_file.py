@@ -8,7 +8,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, String, Text, event, func
+from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, String, Text, Float, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -54,6 +54,7 @@ class MediaFile(Base):
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
         comment="Owner user ID — references users.id",
@@ -74,7 +75,12 @@ class MediaFile(Base):
         comment="Raw file size in bytes — used for subscription enforcement",
     )
     status: Mapped[FileStatus] = mapped_column(
-        Enum(FileStatus, name="file_status_enum", create_type=True),
+        Enum(
+            FileStatus,
+            name="file_status_enum",
+            create_type=True,
+            values_callable=lambda obj: [e.value for e in obj]
+        ),
         nullable=False,
         default=FileStatus.PENDING,
         server_default=FileStatus.PENDING.value,
@@ -85,6 +91,16 @@ class MediaFile(Base):
         Text,
         nullable=True,
         comment="Failure reason stored when status transitions to 'failed'",
+    )
+    processing_message: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="Current processing progress state description",
+    )
+    audio_duration_seconds: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Duration of the audio file in seconds",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

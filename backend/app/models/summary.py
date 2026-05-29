@@ -7,7 +7,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Text, UniqueConstraint, func, Float
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -58,6 +58,11 @@ class Summary(Base):
         JSONB,
         nullable=False,
         comment='Action items: [{"task": "...", "owner": "...", "priority": "..."}]',
+    )
+    generation_time_sec: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Time in seconds taken to generate the summary",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

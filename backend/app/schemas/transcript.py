@@ -29,4 +29,5 @@ class TranscriptResponse(BaseModel):
     file_id: uuid.UUID
     raw_text: str
     segments: list[Any] | None
+    word_count: int | None
     created_at: datetime

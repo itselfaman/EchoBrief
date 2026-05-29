@@ -28,7 +28,7 @@ from app.models import Base  # noqa: F401 — imports all models
 config = context.config
 
 # Override sqlalchemy.url with our app's DATABASE_URL
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("%", "%%"))
 
 # Set up Python logging from alembic.ini
 if config.config_file_name is not None:
