@@ -1,17 +1,3 @@
--- ============================================================
--- EchoBrief — Complete Supabase Schema + RLS + Storage Setup
--- Run this ONCE in: Supabase Dashboard > SQL Editor
---
--- Order of operations:
---   1. Extensions
---   2. Enum types
---   3. Tables  (users → media_files → transcripts → summaries)
---   4. Triggers
---   5. RLS enable + policies
---   6. Storage policies
--- ============================================================
-
-
 -- ── 1. Extensions ────────────────────────────────────────────
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
@@ -214,8 +200,3 @@ CREATE POLICY "storage_service_role_all"
         AND auth.role() = 'service_role'
     );
 
--- ── Done ─────────────────────────────────────────────────────
--- All tables, triggers, RLS policies, and storage policies are now set up.
--- Next step: in your backend, run Alembic ONLY if you want Python to manage
--- schema changes going forward (skip `alembic upgrade head` if you ran
--- this script — the tables already exist).
